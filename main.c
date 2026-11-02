@@ -254,7 +254,6 @@ bool mf_read_basic_event_data(mf_midi_file *file, mf_midi_event *event) {
         /* program changes only have 1 data byte */
         if (!(event->status >= 0xc0 && event->status <= 0xcf))
         {
-            printf("not program change\n");
             event->data_basic.parm2 =
                 *((uint8_t *)(file->buffer + file->buffer_offset++));
         }
@@ -277,7 +276,6 @@ bool mf_read_event(mf_midi_file *file, mf_midi_event *event) {
     uint8_t first_byte = *((uint8_t *)(file->buffer + file->buffer_offset));
     if (first_byte >= 0x80) {
         event->status = first_byte;
-        printf("status: %02x\n", event->status);
         file->_running_status = event->status;
         file->buffer_offset++;
     } else {
@@ -286,33 +284,14 @@ bool mf_read_event(mf_midi_file *file, mf_midi_event *event) {
                             "(%02x)\n", file->_running_status);
         }
         event->status = file->_running_status;
-        printf("RUNNING status: %02x\n", event->status);
         /* we've landed on event data. we shouldn't increment the buffer
          * offset at this point */
     }
 
     if (event->status == 0xff) {
-        bool status = mf_read_meta_event_data(file, event);
-        printf("meta event info:\n"
-               "\tdelta: %d\n"
-               "\tmeta type: %02x\n"
-               "\tlength: %d\n",
-               event->delta,
-               event->data_meta.type,
-               event->data_meta.length);
-        return status;
+        return mf_read_meta_event_data(file, event);
     } else if (event->status >= 0x80) {
-        bool status = mf_read_basic_event_data(file, event);
-        printf("basic event info:\n"
-               "\tdelta: %d\n"
-               "\tstatus: %02x\n"
-               "\tparm1: %02x\n"
-               "\tparm2: %02x\n",
-               event->delta,
-               event->status,
-               event->data_basic.parm1,
-               event->data_basic.parm2);
-        return status;
+        return mf_read_basic_event_data(file, event);
     } else {
         fprintf(stderr, "we're at an unexpected point in the file!!\n");
         fprintf(stderr, "buffer_offset: %zu\n", file->buffer_offset);
@@ -339,15 +318,16 @@ mf_midi_event_linked_list *mf_create_event_linked_list() {
     return list;
 }
 
-void mf_free_event_linked_list(mf_midi_event_linked_list *list) {
+void mf_free_track(mf_midi_track *track) {
     mf_midi_event_linked_list *tmp = NULL;
-    mf_midi_event_linked_list *cur = list;
+    mf_midi_event_linked_list *cur = track->events;
+
     while (cur != NULL) {
         tmp = cur;
-        if (tmp->cur_event.status == 0xff
-            && tmp->cur_event.data_meta.length > 0)
-            free(tmp->cur_event.data_meta.data);
         cur = cur->next_event;
+        if (tmp->cur_event.status == 0xff &&
+            tmp->cur_event.data_meta.data != NULL)
+            free(tmp->cur_event.data_meta.data);
         free(tmp);
     }
 }
@@ -379,19 +359,15 @@ bool mf_read_next_track(mf_midi_file *file, mf_midi_track *track) {
 
     mf_midi_event_linked_list *e = track->events;
     while (1) {
-        printf("o: %zu, ne: %zu\n", file->buffer_offset, track->nr_events);
         if (!mf_read_event(file, &e->cur_event)) {
             fprintf(stderr, "mf_read_event failed, see above\n");
             goto event_read_fail;
         }
         track->nr_events++;
 
-        printf("ofinal: %zu\n", file->buffer_offset);
-
         /* end of track */
         if (e->cur_event.status == 0xff &&
             e->cur_event.data_meta.type == 0x2f) {
-            printf("eot\n");
             break;
         }
 
@@ -406,13 +382,14 @@ bool mf_read_next_track(mf_midi_file *file, mf_midi_track *track) {
             fprintf(stderr, "next_event allocation failure\n");
             goto event_read_fail;
         }
+        e = e->next_event;
     }
 
     return true;
 
 event_read_fail:
     fprintf(stderr, "event read fail..\n");
-    mf_free_event_linked_list(track->events);
+    mf_free_track(track);
     return false;
 }
 
@@ -431,63 +408,18 @@ int main() {
 
     mf_midi_track test_track;
 
-    printf("-----TRACK1-----\n");
-    if (!mf_read_next_track(file, &test_track)) {
-        mf_free(file);
-        return 1;
+    for (int i = 0; i < mf_get_tracks(file); i++) {
+        printf("-----TRACK%02d-----\n", i);
+        if (!mf_read_next_track(file, &test_track)) {
+            mf_free(file);
+            return 1;
+        }
+
+        printf("%d | %zu events\n", test_track.byte_length,
+               test_track.nr_events);
+        mf_free_track(&test_track);
     }
 
-    printf("-----TRACK2-----\n");
-    if (!mf_read_next_track(file, &test_track)) {
-        mf_free(file);
-        return 1;
-    }
-
-    printf("-----TRACK3-----\n");
-    if (!mf_read_next_track(file, &test_track)) {
-        mf_free(file);
-        return 1;
-    }
-
-    printf("-----TRACK4-----\n");
-    if (!mf_read_next_track(file, &test_track)) {
-        mf_free(file);
-        return 1;
-    }
-
-    printf("-----TRACK5-----\n");
-    if (!mf_read_next_track(file, &test_track)) {
-        mf_free(file);
-        return 1;
-    }
-
-    printf("-----TRACK6-----\n");
-    if (!mf_read_next_track(file, &test_track)) {
-        mf_free(file);
-        return 1;
-    }
-
-    printf("-----TRACK7-----\n");
-    if (!mf_read_next_track(file, &test_track)) {
-        mf_free(file);
-        return 1;
-    }
-
-    printf("-----TRACK8-----\n");
-    if (!mf_read_next_track(file, &test_track)) {
-        mf_free(file);
-        return 1;
-    }
-
-    printf("-----TRACK9-----\n");
-    if (!mf_read_next_track(file, &test_track)) {
-        mf_free(file);
-        return 1;
-    }
-
-    printf("%d\n", test_track.byte_length);
-
-    mf_free_event_linked_list(test_track.events);
     mf_free(file);
 
     return 0;
