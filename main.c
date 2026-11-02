@@ -57,6 +57,20 @@ struct _mf_midi_file {
     uint32_t        _read_vlq;
 };
 
+void mf_free_track(mf_midi_track *track) {
+    mf_midi_event_linked_list *tmp = NULL;
+    mf_midi_event_linked_list *cur = track->events;
+
+    while (cur != NULL) {
+        tmp = cur;
+        cur = cur->next_event;
+        if (tmp->cur_event.status == 0xff &&
+            tmp->cur_event.data_meta.data != NULL)
+            free(tmp->cur_event.data_meta.data);
+        free(tmp);
+    }
+}
+
 #pragma region creation / freeing
 mf_midi_file *mf_create_from_buf(void *buf, size_t bufSize) {
     mf_midi_file *mf = malloc(sizeof(mf_midi_file));
@@ -67,6 +81,7 @@ mf_midi_file *mf_create_from_buf(void *buf, size_t bufSize) {
     mf->_buf_is_managed = false;
     mf->_running_status = 0;
     mf->_read_vlq = 0;
+    mf->tracks = NULL;
     return mf;
 }
 
@@ -94,6 +109,7 @@ mf_midi_file *mf_create_from_file(const char *fileName) {
     mf->_running_status = 0;
     mf->_buf_is_managed = true;
     mf->buffer_size = fileSize;
+    mf->tracks = NULL;
 
     fseek(file, 0, SEEK_SET);
     if (fread(mf->buffer, fileSize, 1, file) != 1) {
@@ -111,6 +127,12 @@ mf_midi_file *mf_create_from_file(const char *fileName) {
 void mf_free(mf_midi_file *file) {
     if (file == NULL) return;
     if (file->_buf_is_managed) free(file->buffer);
+    if (file->tracks != NULL) {
+        for (uint16_t i = 0; i < file->nr_tracks; i++) {
+            mf_free_track(&file->tracks[i]);
+        }
+        free(file->tracks);
+    }
 
     free(file);
 }
@@ -338,20 +360,6 @@ mf_midi_event_linked_list *mf_create_event_linked_list() {
     return list;
 }
 
-void mf_free_track(mf_midi_track *track) {
-    mf_midi_event_linked_list *tmp = NULL;
-    mf_midi_event_linked_list *cur = track->events;
-
-    while (cur != NULL) {
-        tmp = cur;
-        cur = cur->next_event;
-        if (tmp->cur_event.status == 0xff &&
-            tmp->cur_event.data_meta.data != NULL)
-            free(tmp->cur_event.data_meta.data);
-        free(tmp);
-    }
-}
-
 bool mf_read_next_track(mf_midi_file *file, mf_midi_track *track) {
     track->byte_length = 0;
     track->nr_events = 0;
@@ -413,6 +421,21 @@ event_read_fail:
     return false;
 }
 
+bool mf_read_all_tracks(mf_midi_file *file) {
+    if (file->tracks == NULL) {
+        file->tracks = malloc(sizeof(mf_midi_track) * file->nr_tracks);
+        if (file->tracks == NULL) return false;
+    }
+
+    for (uint16_t i = 0; i < file->nr_tracks; i++) {
+        if (!mf_read_next_track(file, &file->tracks[i])) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 int main() {
     mf_midi_file *file = mf_create_from_file("test.mid");
     if (file == NULL) {
@@ -424,18 +447,9 @@ int main() {
         return 1;
     }
 
-    mf_midi_track test_track;
-
-    for (int i = 0; i < file->nr_tracks; i++) {
-        printf("-----TRACK%02d-----\n", i);
-        if (!mf_read_next_track(file, &test_track)) {
-            mf_free(file);
-            return 1;
-        }
-
-        printf("%d | %zu events\n", test_track.byte_length,
-               test_track.nr_events);
-        mf_free_track(&test_track);
+    if (!mf_read_all_tracks(file)) {
+        mf_free(file);
+        return 1;
     }
 
     mf_free(file);
