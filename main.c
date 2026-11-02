@@ -5,12 +5,6 @@
 #include <stdint.h>
 #include <string.h>
 
-//#define SHUT_UP
-#ifdef SHUT_UP
-#define printf(...)
-#define fprintf(...)
-#endif
-
 typedef struct _mf_midi_event_data_meta mf_midi_event_data_meta;
 struct _mf_midi_event_data_meta {
     uint8_t     type;
