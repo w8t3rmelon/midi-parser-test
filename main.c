@@ -42,13 +42,19 @@ struct _mf_midi_track {
 
 typedef struct _mf_midi_file mf_midi_file;
 struct _mf_midi_file {
-    void        *buffer;
-    size_t      buffer_size;
-    size_t      buffer_offset;
+    void            *buffer;
+    size_t          buffer_size;
+    size_t          buffer_offset;
 
-    bool        _buf_is_managed;
-    uint8_t     _running_status;
-    uint32_t    _read_vlq;
+    uint8_t         format;
+    uint16_t        nr_tracks;
+    uint16_t        time_division;
+
+    mf_midi_track   *tracks;
+
+    bool            _buf_is_managed;
+    uint8_t         _running_status;
+    uint32_t        _read_vlq;
 };
 
 #pragma region creation / freeing
@@ -168,7 +174,7 @@ uint8_t mf_get_format(mf_midi_file *file) {
     return ((uint8_t *)(file->buffer))[9];
 }
 
-uint16_t mf_get_tracks(mf_midi_file *file) {
+uint16_t mf_get_nr_tracks(mf_midi_file *file) {
     /* offset = 9 bytes (read 2 bytes) */
     uint16_t val = *((uint16_t *)(file->buffer + 10));
     val = swap_16(val);
@@ -182,8 +188,28 @@ uint16_t mf_get_division(mf_midi_file *file) {
     return val;
 }
 
-void mf_header_read_finish(mf_midi_file *file) {
+bool mf_check_and_read_header(mf_midi_file *file) {
+    if (!mf_check_magic(file)) {
+        fprintf(stderr, "magic number in header doesn't match..\n");
+        return false;
+    }
+
+    if (!mf_check_header_length(file)) {
+        fprintf(stderr, "header length isn't 6..\n");
+        return false;
+    }
+
+    file->format = mf_get_format(file);
+    if (file->format > 1) {
+        fprintf(stderr, "format ids > 1 not supported!\n");
+        return false;
+    }
+    file->nr_tracks = mf_get_nr_tracks(file);
+    file->time_division = mf_get_division(file);
+
     file->buffer_offset = 14;
+
+    return true;
 }
 
 /* loosely based on fluid_midi_file_read_varlen from fluidsynth */
@@ -393,16 +419,14 @@ int main() {
         return 1;
     }
 
-    //printf("%d\n", mf_check_magic(file));
-    //printf("%d\n", mf_check_header_length(file));
-    //printf("%d\n", mf_get_format(file));
-    //printf("%d\n", mf_get_tracks(file));
-    //printf("%d\n", mf_get_division(file));
-    mf_header_read_finish(file);
+    if (!mf_check_and_read_header(file)) {
+        mf_free(file);
+        return 1;
+    }
 
     mf_midi_track test_track;
 
-    for (int i = 0; i < mf_get_tracks(file); i++) {
+    for (int i = 0; i < file->nr_tracks; i++) {
         printf("-----TRACK%02d-----\n", i);
         if (!mf_read_next_track(file, &test_track)) {
             mf_free(file);
