@@ -166,7 +166,7 @@ uint64_t swap_64(uint64_t i) {
           ((val & 0x0000000000ff0000ULL) << 24) |
           ((val & 0x0000ff0000000000ULL) >> 24) |
 
-          ((val & 0x00000000ff000000ULL) <<  8) |
+          ((val & 0x00000000ff000000ULL) << 8) |
           ((val & 0x000000ff00000000ULL) >> 8);
 
     return val;
@@ -339,8 +339,6 @@ bool mf_read_event(mf_midi_file *file, mf_midi_event *event) {
         fprintf(stderr, "buffer_offset: %zu\n", file->buffer_offset);
         return false;
     }
-
-
 
     return true;
 }
