@@ -90,6 +90,8 @@ mf_midi_file *mf_create_from_file(const char *fileName) {
     }
 
     mf->buffer_offset = 0;
+    mf->_read_vlq = 0;
+    mf->_running_status = 0;
     mf->_buf_is_managed = true;
     mf->buffer_size = fileSize;
 
@@ -195,11 +197,12 @@ bool mf_read_vlq(mf_midi_file *file) {
     file->_read_vlq = 0;
 
     int i = 0;
+    uint8_t val;
 
-    do {
+    for (;; i++) {
         if (i == 4) return false;
 
-        uint8_t val = *((uint8_t *)(file->buffer + file->buffer_offset));
+        val = *((uint8_t *)(file->buffer + file->buffer_offset));
         if (val & 0x80) {
             file->_read_vlq |= (uint32_t)(val & 0x7f);
             file->_read_vlq <<= 7;
@@ -209,7 +212,7 @@ bool mf_read_vlq(mf_midi_file *file) {
             file->buffer_offset++;
             break;
         }
-    } while (i++);
+    }
 
     return true;
 }
@@ -248,8 +251,14 @@ bool mf_read_basic_event_data(mf_midi_file *file, mf_midi_event *event) {
     if (event->status >= 0x80 && event->status <= 0xef) {
         event->data_basic.parm1 =
             *((uint8_t *)(file->buffer + file->buffer_offset++));
-        event->data_basic.parm2 =
-            *((uint8_t *)(file->buffer + file->buffer_offset++));
+        /* program changes only have 1 data byte */
+        if (!(event->status >= 0xc0 && event->status <= 0xcf))
+        {
+            printf("not program change\n");
+            event->data_basic.parm2 =
+                *((uint8_t *)(file->buffer + file->buffer_offset++));
+        }
+        else event->data_basic.parm2 = 0;
     } else {
         fprintf(stderr, "%02x isn't a basic event..\n", event->status);
         return false;
@@ -360,6 +369,8 @@ bool mf_read_next_track(mf_midi_file *file, mf_midi_track *track) {
     track->byte_length = byte_length;
     file->buffer_offset += 4;
 
+    size_t last_offset = file->buffer_offset;
+
     track->events = mf_create_event_linked_list();
     if (track->events == NULL) {
         fprintf(stderr, "couldn't allocate list for track events\n");
@@ -382,6 +393,12 @@ bool mf_read_next_track(mf_midi_file *file, mf_midi_track *track) {
             e->cur_event.data_meta.type == 0x2f) {
             printf("eot\n");
             break;
+        }
+
+        if (file->buffer_offset - last_offset >= track->byte_length) {
+            fprintf(stderr, "unexpectedly reached past end of track!! (o: %zu)"
+                            "\n", file->buffer_offset);
+            goto event_read_fail;
         }
 
         e->next_event = mf_create_event_linked_list();
@@ -414,11 +431,55 @@ int main() {
 
     mf_midi_track test_track;
 
+    printf("-----TRACK1-----\n");
     if (!mf_read_next_track(file, &test_track)) {
         mf_free(file);
         return 1;
     }
 
+    printf("-----TRACK2-----\n");
+    if (!mf_read_next_track(file, &test_track)) {
+        mf_free(file);
+        return 1;
+    }
+
+    printf("-----TRACK3-----\n");
+    if (!mf_read_next_track(file, &test_track)) {
+        mf_free(file);
+        return 1;
+    }
+
+    printf("-----TRACK4-----\n");
+    if (!mf_read_next_track(file, &test_track)) {
+        mf_free(file);
+        return 1;
+    }
+
+    printf("-----TRACK5-----\n");
+    if (!mf_read_next_track(file, &test_track)) {
+        mf_free(file);
+        return 1;
+    }
+
+    printf("-----TRACK6-----\n");
+    if (!mf_read_next_track(file, &test_track)) {
+        mf_free(file);
+        return 1;
+    }
+
+    printf("-----TRACK7-----\n");
+    if (!mf_read_next_track(file, &test_track)) {
+        mf_free(file);
+        return 1;
+    }
+
+    printf("-----TRACK8-----\n");
+    if (!mf_read_next_track(file, &test_track)) {
+        mf_free(file);
+        return 1;
+    }
+
+    printf("-----TRACK9-----\n");
     if (!mf_read_next_track(file, &test_track)) {
         mf_free(file);
         return 1;
