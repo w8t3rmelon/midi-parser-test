@@ -1,4 +1,4 @@
-#include "mf_construct.h"
+#include <mf_construct.h>
 
 void mf_free_track(mf_midi_track *track) {
     mf_midi_event_linked_list *tmp = NULL;

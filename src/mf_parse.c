@@ -1,7 +1,7 @@
-#include "mf_parse.h"
+#include <mf_parse.h>
 
-#include "mf_construct.h"
-#include "mf_util.h"
+#include <mf_construct.h>
+#include <mf_util.h>
 
 /* so many stds. just like mewgenics! */
 #include <stdlib.h>
