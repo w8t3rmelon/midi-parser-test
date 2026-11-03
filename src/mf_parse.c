@@ -1,194 +1,32 @@
-#include <stdio.h>
+#include "mf_parse.h"
 
+#include "mf_construct.h"
+#include "mf_util.h"
+
+/* so many stds. just like mewgenics! */
 #include <stdlib.h>
-#include <stdbool.h>
-#include <stdint.h>
+#include <stdio.h>
 #include <string.h>
-
-typedef struct _mf_midi_event_data_meta mf_midi_event_data_meta;
-struct _mf_midi_event_data_meta {
-    uint8_t     type;
-    uint32_t    length;
-    uint8_t     *data;
-};
-
-typedef struct _mf_midi_event_data_basic mf_midi_event_data_basic;
-struct _mf_midi_event_data_basic {
-    uint8_t     parm1;
-    uint8_t     parm2;
-};
-
-typedef struct _mf_midi_event mf_midi_event;
-struct _mf_midi_event {
-    uint32_t    delta;
-    uint8_t     status;
-
-    mf_midi_event_data_basic    data_basic;
-    mf_midi_event_data_meta     data_meta;
-};
-
-typedef struct _mf_midi_event_linked_list mf_midi_event_linked_list;
-struct _mf_midi_event_linked_list {
-    mf_midi_event             cur_event;
-    mf_midi_event_linked_list *next_event;
-};
-
-typedef struct _mf_midi_track mf_midi_track;
-struct _mf_midi_track {
-    uint32_t                    byte_length;
-    uint64_t                    nr_events;
-    mf_midi_event_linked_list   *events;
-};
-
-typedef struct _mf_midi_file mf_midi_file;
-struct _mf_midi_file {
-    void            *buffer;
-    size_t          buffer_size;
-    size_t          buffer_offset;
-
-    uint8_t         format;
-    uint16_t        nr_tracks;
-    uint16_t        time_division;
-
-    mf_midi_track   *tracks;
-
-    bool            _buf_is_managed;
-    uint8_t         _running_status;
-    uint32_t        _read_vlq;
-};
-
-void mf_free_track(mf_midi_track *track) {
-    mf_midi_event_linked_list *tmp = NULL;
-    mf_midi_event_linked_list *cur = track->events;
-
-    while (cur != NULL) {
-        tmp = cur;
-        cur = cur->next_event;
-        if (tmp->cur_event.status == 0xff &&
-            tmp->cur_event.data_meta.data != NULL)
-            free(tmp->cur_event.data_meta.data);
-        free(tmp);
-    }
-}
-
-#pragma region creation / freeing
-mf_midi_file *mf_create_from_buf(void *buf, size_t bufSize) {
-    mf_midi_file *mf = malloc(sizeof(mf_midi_file));
-    if (mf == NULL) return NULL;
-    mf->buffer = buf;
-    mf->buffer_size = bufSize;
-    mf->buffer_offset = 0;
-    mf->_buf_is_managed = false;
-    mf->_running_status = 0;
-    mf->_read_vlq = 0;
-    mf->tracks = NULL;
-    return mf;
-}
-
-mf_midi_file *mf_create_from_file(const char *fileName) {
-    mf_midi_file *mf = malloc(sizeof(mf_midi_file));
-    if (mf == NULL) return NULL;
-    FILE *file = fopen(fileName, "rb");
-    if (file == NULL) {
-        free(mf);
-        return NULL;
-    }
-
-    fseek(file, 0, SEEK_END);
-    int fileSize = ftell(file);
-
-    mf->buffer = malloc(fileSize);
-    if (mf->buffer == NULL) {
-        free(mf);
-        fclose(file);
-        return NULL;
-    }
-
-    mf->buffer_offset = 0;
-    mf->_read_vlq = 0;
-    mf->_running_status = 0;
-    mf->_buf_is_managed = true;
-    mf->buffer_size = fileSize;
-    mf->tracks = NULL;
-
-    fseek(file, 0, SEEK_SET);
-    if (fread(mf->buffer, fileSize, 1, file) != 1) {
-        free(mf->buffer);
-        free(mf);
-        fclose(file);
-        return NULL;
-    }
-
-    fclose(file);
-
-    return mf;
-}
-
-void mf_free(mf_midi_file *file) {
-    if (file == NULL) return;
-    if (file->_buf_is_managed) free(file->buffer);
-    if (file->tracks != NULL) {
-        for (uint16_t i = 0; i < file->nr_tracks; i++) {
-            mf_free_track(&file->tracks[i]);
-        }
-        free(file->tracks);
-    }
-
-    free(file);
-}
-#pragma endregion
-
-#pragma region utility functions
-uint16_t swap_16(uint16_t i) {
-    uint16_t val = i;
-    val = ((val & 0xff00) >> 8) | ((val & 0x00ff) << 8);
-    return val;
-}
-
-uint32_t swap_32(uint32_t i) {
-    uint32_t val = i;
-
-    val = ((val & 0xff) << 24) | ((val & 0xff00) << 8) |
-          ((val & 0xff0000) >> 8) | ((val & 0xff000000) >> 24);
-
-    return val;
-}
-
-uint64_t swap_64(uint64_t i) {
-    uint64_t val = i;
-
-    val = ((val & 0x00000000000000ffULL) << 56) |
-          ((val & 0xff00000000000000ULL) >> 56) |
-
-          ((val & 0x000000000000ff00ULL) << 40) |
-          ((val & 0x00ff000000000000ULL) >> 40) |
-
-          ((val & 0x0000000000ff0000ULL) << 24) |
-          ((val & 0x0000ff0000000000ULL) >> 24) |
-
-          ((val & 0x00000000ff000000ULL) << 8) |
-          ((val & 0x000000ff00000000ULL) >> 8);
-
-    return val;
-}
-#pragma endregion
 
 /* some of these functions probably need adjustments for big-endian systems */
 
-bool mf_check_magic(mf_midi_file *file) {
+/* check if the first four bytes of the file contains the 'MThd' marker */
+static bool mf_check_magic(mf_midi_file *file) {
     /* 4d 54 68 64 = "MThd" */
     /* offset = 0 bytes (read 4 bytes) */
     return ((uint32_t *)(file->buffer))[0] == 0x6468544d;
 }
 
-bool mf_check_header_length(mf_midi_file *file) {
+/* check if 'header length' field in the file is equal to 6 */
+static bool mf_check_header_length(mf_midi_file *file) {
     /* checking a few sources, the length of the header is always 6 bytes.. */
     /* could bswap here but it'd be faster to compare the value as-is */
     /* offset = 4 bytes (read 4 bytes) */
     return ((uint32_t *)(file->buffer))[1] == 0x06000000;
 }
 
-uint8_t mf_get_format(mf_midi_file *file) {
+/* gets the format id from the file */
+static uint8_t mf_get_format(mf_midi_file *file) {
     /* the format field is actually two bytes, but only 2 bits of this field
      * is actually used. just so we don't have to swap endianness, let's read
      * only the first byte */
@@ -196,14 +34,16 @@ uint8_t mf_get_format(mf_midi_file *file) {
     return ((uint8_t *)(file->buffer))[9];
 }
 
-uint16_t mf_get_nr_tracks(mf_midi_file *file) {
+/* gets the number of tracks in the file */
+static uint16_t mf_get_nr_tracks(mf_midi_file *file) {
     /* offset = 9 bytes (read 2 bytes) */
     uint16_t val = *((uint16_t *)(file->buffer + 10));
     val = swap_16(val);
     return val;
 }
 
-uint16_t mf_get_division(mf_midi_file *file) {
+/* gets the time division value (pulses per quarter) from the file */
+static uint16_t mf_get_division(mf_midi_file *file) {
     /* offset = 12 bytes (read 2 bytes) */
     uint16_t val = ((uint16_t *)(file->buffer))[6];
     val = swap_16(val);
@@ -234,8 +74,10 @@ bool mf_check_and_read_header(mf_midi_file *file) {
     return true;
 }
 
-/* loosely based on fluid_midi_file_read_varlen from fluidsynth */
-bool mf_read_vlq(mf_midi_file *file) {
+/* reads a variable-length integer from the file (at file.buffer_offset)
+ *
+ * loosely based on fluid_midi_file_read_varlen from fluidsynth */
+static bool mf_read_vlq(mf_midi_file *file) {
     file->_read_vlq = 0;
 
     int i = 0;
@@ -259,7 +101,8 @@ bool mf_read_vlq(mf_midi_file *file) {
     return true;
 }
 
-bool mf_read_meta_event_data(mf_midi_file *file, mf_midi_event *event) {
+/* reads meta event data from the file (at file.buffer_offset) */
+static bool mf_read_meta_event_data(mf_midi_file *file, mf_midi_event *event) {
     event->data_meta.type =
         *((uint8_t *)(file->buffer + file->buffer_offset));
 
@@ -289,7 +132,9 @@ bool mf_read_meta_event_data(mf_midi_file *file, mf_midi_event *event) {
     return true;
 }
 
-bool mf_read_basic_event_data(mf_midi_file *file, mf_midi_event *event) {
+/* reads basic event data (1 or 2 1-byte parameters) from the file
+ * (at file.buffer_offset) */
+static bool mf_read_basic_event_data(mf_midi_file *file, mf_midi_event *event) {
     if (event->status >= 0x80 && event->status <= 0xef) {
         event->data_basic.parm1 =
             *((uint8_t *)(file->buffer + file->buffer_offset++));
@@ -308,7 +153,8 @@ bool mf_read_basic_event_data(mf_midi_file *file, mf_midi_event *event) {
     return true;
 }
 
-bool mf_read_event(mf_midi_file *file, mf_midi_event *event) {
+/* reads event data from the file (populates parameters accordingly) */
+static bool mf_read_event(mf_midi_file *file, mf_midi_event *event) {
     if (!mf_read_vlq(file)) {
         fprintf(stderr, "invalid vlq read\n");
         return false;
@@ -341,21 +187,6 @@ bool mf_read_event(mf_midi_file *file, mf_midi_event *event) {
     }
 
     return true;
-}
-
-mf_midi_event_linked_list *mf_create_event_linked_list() {
-    mf_midi_event_linked_list *list = malloc(sizeof(mf_midi_event_linked_list));
-    if (list == NULL) return NULL;
-    list->cur_event.delta = 0;
-    list->cur_event.status = 0;
-    list->cur_event.data_basic.parm1 = 0;
-    list->cur_event.data_basic.parm2 = 0;
-    list->cur_event.data_meta.type = 0;
-    list->cur_event.data_meta.length = 0;
-    list->cur_event.data_meta.data = NULL;
-    list->next_event = NULL;
-
-    return list;
 }
 
 bool mf_read_next_track(mf_midi_file *file, mf_midi_track *track) {
@@ -432,25 +263,4 @@ bool mf_read_all_tracks(mf_midi_file *file) {
     }
 
     return true;
-}
-
-int main() {
-    mf_midi_file *file = mf_create_from_file("test.mid");
-    if (file == NULL) {
-        return 1;
-    }
-
-    if (!mf_check_and_read_header(file)) {
-        mf_free(file);
-        return 1;
-    }
-
-    if (!mf_read_all_tracks(file)) {
-        mf_free(file);
-        return 1;
-    }
-
-    mf_free(file);
-
-    return 0;
 }
