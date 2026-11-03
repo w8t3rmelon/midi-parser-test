@@ -1,5 +1,5 @@
-#include "../mf_construct.h"
-#include "../mf_parse.h"
+#include <mf_construct.h>
+#include <mf_parse.h>
 
 int main() {
     mf_midi_file *file = mf_create_from_file("test.mid");
